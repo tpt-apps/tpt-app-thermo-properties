@@ -45,10 +45,17 @@
       — free edition: 150 KB raw, **57.3 KB gzipped** (budget ~2 MB gz)
 
 ## Phase 2 — Free WASM UI
-- [ ] Refrigerant picker (common fluids) + single-point property lookup
+- [x] Refrigerant picker (common fluids) + single-point property lookup
       (pressure/temperature/enthalpy)
-- [ ] Free-tier upsell copy pointing at full cycle analysis, saved library, export
-- [ ] Browser-verified: mount, lookup, results render correctly
+      — 9 fluids × 3 modes (saturation by T, saturation by p, superheated
+      (T, p) point): full sat table (psat, ρf/ρg, hf/hg/hfg, sf/sg), point
+      table (h, s, ρ, v, region), fluid-constants card, ASHRAE reference
+      stated in the header. Browser-verified through trunk serve: all three
+      modes, invalid/out-of-range inputs, example button.
+- [x] Free-tier upsell copy pointing at full cycle analysis, saved library, export
+- [x] Browser-verified: mount, lookup, results render correctly
+      (bundle: 218 KB raw, **89.5 KB gz**; copied to the web repo's
+      `public/apps/thermo-properties/`)
 
 ## Phase 3 — Paid desktop edition (cargo feature `pro`)
 - [ ] `pro` gates: full refrigeration/Rankine cycle analysis, saved fluid
