@@ -271,7 +271,7 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
                 let lookup = outcome.get();
                 let refr = ref_outcome.get();
                 let rank = rankine_outcome.get();
-                let calc = pro::capture_current(&container, &lookup, &refr, &rank);
+                let calc = pro::capture_current(&lookup, &refr, &rank);
                 match pro::save_current(&calc) {
                     Ok(_) => pro::refresh_library(&lib_outcome, lib_counter.get() + 1),
                     Err(msg) => alert(&msg),
@@ -279,7 +279,7 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
             }
             #[cfg(feature = "pro")]
             Msg::DeleteCalc(id) => {
-                pro::delete_calc(&id);
+                library::delete(&id);
                 pro::refresh_library(&lib_outcome, lib_counter.get() + 1);
             }
             #[cfg(feature = "pro")]
@@ -293,7 +293,7 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
                 let lookup = outcome.get();
                 let refr = ref_outcome.get();
                 let rank = rankine_outcome.get();
-                let calc = pro::capture_current(&container, &lookup, &refr, &rank);
+                let calc = pro::capture_current(&lookup, &refr, &rank);
                 if let Err(msg) = pro::export_calc_sheet(&calc) {
                     alert(&msg);
                 }
@@ -303,7 +303,7 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
                 let lookup = outcome.get();
                 let refr = ref_outcome.get();
                 let rank = rankine_outcome.get();
-                let calc = pro::capture_current(&container, &lookup, &refr, &rank);
+                let calc = pro::capture_current(&lookup, &refr, &rank);
                 if let Err(msg) = pro::export_calc_csv(&calc) {
                     alert(&msg);
                 }
@@ -443,7 +443,7 @@ fn read_css(container: &web_sys::Element, name: &str, fallback: &str) -> String 
 #[cfg(feature = "pro")]
 fn alert(message: &str) {
     if let Some(window) = window() {
-        window.alert_with_message(message);
+        let _ = window.alert_with_message(message);
     }
 }
 
@@ -475,11 +475,6 @@ pub fn apply_mode_pub(container: &web_sys::Element, mode_id: &str) {
 #[cfg(feature = "pro")]
 pub fn run_lookup_pub(container: &web_sys::Element, outcome: &Signal<Outcome>) {
     run_lookup(container, outcome);
-}
-
-#[cfg(feature = "pro")]
-pub fn delete_calc(id: &str) {
-    library::delete(id);
 }
 
 fn visit_site(url: &str) {

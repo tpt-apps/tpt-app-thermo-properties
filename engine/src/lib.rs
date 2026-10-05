@@ -11,11 +11,16 @@
 //! - [`cycle`] (feature `pro`) — refrigeration and Rankine cycle analysis,
 //! - [`export`] (feature `pro`) — calculation-sheet rendering.
 //!
-//! The long-term home for these correlations is the `tpt-thermodynamics`
-//! workspace; until that repo's crate set lands, this crate owns the
-//! implementation behind the same public surface (fluid + state in → values
-//! out; cycle definition in → performance out), so a later swap is an
-//! engine-internal change, not an app change.
+//! Integration with the `tpt-thermodynamics` workspace (path deps — not yet
+//! on crates.io): the Peng-Robinson cubic solver and the residual h/s terms
+//! now come from `tpt-thermo-eos-cubic` (see `peng_robinson.rs`), with the
+//! engine's fluid table fed in through the `ComponentDatabase` trait. The
+//! anchor-calibrated correlations (psat, saturated liquid density, latent
+//! heat, heat capacities) stay in this crate: the upstream compound seed
+//! carries only critical constants — no ideal-gas cp correlations or
+//! saturation anchors — and three of the nine fluids (R-32, R-125, R-1234yf)
+//! are not in the seed yet. Contributing those records upstream is the
+//! natural follow-up.
 
 pub mod cycle;
 pub mod fluids;

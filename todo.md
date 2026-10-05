@@ -25,11 +25,17 @@
 - [x] Survey `tpt-thermodynamics` for refrigerant/working-fluid property
       correlations (pressure/temperature/enthalpy) and cycle-analysis support
       (refrigeration cycle, Rankine cycle)
-      — **finding: that repo is workspace bootstrap only, zero crates built
-      (its own todo estimates 16-18 sessions)**. Correlations therefore live
-      in this repo's `engine/` behind the same public surface (fluid + state
-      in → values out; cycle in → performance out), so a later
-      tpt-thermodynamics swap is engine-internal. Rankine side uses published
+      — **update: the crate set has now landed upstream** (core, data,
+      eos-cubic, eos-saft, eos-activity, phase, bubble-dew, flash, transport,
+      electrolyte, polymer, umbrella). The engine now delegates the
+      Peng-Robinson machinery (cubic solving, residual h/s, root selection)
+      to `tpt-thermo-eos-cubic` via path deps, feeding the engine's fluid
+      table in through `ComponentDatabase`. The anchor-calibrated
+      correlations (psat, liquid density, latent heat, cp) stay here: the
+      upstream seed carries only critical constants (no ideal-gas cp
+      correlations or saturation anchors) and R-32/R-125/R-1234yf are not in
+      the seed yet. PR-1976 kappa is supplied via the pluggable AlphaFunction
+      (upstream's default is the SRK kappa). Rankine side unchanged:
       `tpt-eng-props-water` 0.1.0 (IAPWS-IF97 regions 1/2/4).
 - [x] Adapter crate `engine/`: fluid + state point in → property values out;
       cycle definition in → cycle performance (COP, work, heat duty) out — as
@@ -37,12 +43,17 @@
       (`state_at`, `refrigeration_cycle`, `rankine_cycle` (pro))
 - [x] Validation cases against known reference property tables (e.g. R-134a,
       R-410A at standard points) to establish accuracy bounds
-      — 34 tests: per-fluid psat/density/latent-heat anchors, R-134a
-      textbook cycle (COP ≈ 5.4), Moran 8 MPa/480 °C/8 kPa Rankine
-      (η ≈ 0.397, x₂ ≈ 0.794). Stated bounds ship on every export sheet
+      — 34 tests green on the delegated engine: per-fluid psat/density/
+      latent-heat anchors, R-134a textbook cycle (COP ≈ 5.4), Moran
+      8 MPa/480 °C/8 kPa Rankine (η ≈ 0.397, x₂ ≈ 0.794). Superheated h
+      moved *closer* to reference tables (R-134a 60 °C/1017 kPa: 441.3 vs
+      table ≈ 441.2). Stated bounds ship on every export sheet
       (`export::ACCURACY_NOTE`).
 - [x] Wasm payload size check once the sub-crate set is chosen
-      — free edition: 150 KB raw, **57.3 KB gzipped** (budget ~2 MB gz)
+      — free edition after integration: 256 KB raw, **103.4 KB gzipped**
+      (budget ~2 MB gz; +14 KB gz vs the hand-rolled PR — the upstream
+      2 718-compound seed dataset dead-strips because it is never
+      referenced)
 
 ## Phase 2 — Free WASM UI
 - [x] Refrigerant picker (common fluids) + single-point property lookup

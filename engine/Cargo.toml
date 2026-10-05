@@ -11,13 +11,22 @@ default = []
 # Compiled out of the free WASM build to keep the payload small; the
 # refrigeration-cycle side is correlation-based and stays in the default set
 # behind the app-level `pro` feature.
-pro = ["dep:tpt-eng-props-water", "dep:tpt-math-units"]
+pro = ["dep:tpt-eng-props-water"]
 
 [dependencies]
 # Published crates.io version strings (ecosystem convention for cross-repo
 # deps): IAPWS-IF97 water/steam for the Rankine cycle side, plus its uom
 # facade for the typed SI units.
 tpt-eng-props-water = { version = "0.1.0", optional = true }
-tpt-math-units = { version = "0.1.0", optional = true }
+# tpt-thermodynamics machinery (path dep — not yet on crates.io): the
+# Peng-Robinson cubic solver + residual terms now come from there instead of
+# being implemented in this repo. Only core + eos-cubic are needed; the
+# upstream 2 718-compound seed dataset is NOT consumed (the engine feeds its
+# own anchor-calibrated fluid records in via the ComponentDatabase trait).
+tpt-thermo-core = { path = "D:/Programming/1PRODUCTION/Open Source/tpt-thermodynamics/crates/tpt-thermo-core" }
+tpt-thermo-eos-cubic = { path = "D:/Programming/1PRODUCTION/Open Source/tpt-thermodynamics/crates/tpt-thermo-eos-cubic" }
+# uom facade (published): the typed SI quantities the tpt-thermodynamics
+# machinery speaks. Needed for the PR adapter in all editions now.
+tpt-math-units = "0.1.0"
 # Instant that works on wasm32 (performance.now) and native hosts alike.
 web-time = "1"

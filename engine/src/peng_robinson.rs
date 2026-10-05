@@ -1,130 +1,152 @@
-//! Peng-Robinson equation of state: vapor-root compressibility plus residual
-//! (departure) enthalpy and entropy.
+//! Peng-Robinson equation of state, delegated to `tpt-thermo-eos-cubic`.
 //!
-//! Used for:
-//! - saturated/superheated **vapor density** (better than ideal-gas in the
-//!   pressure range refrigeration cycles actually run at),
-//! - the vapor-side enthalpy/entropy **consistency correction** so a state's
-//!   h and s are anchored on the saturation curve (Watson latent heat) and
-//!   shift correctly with superheat and pressure.
+//! The tpt-thermodynamics workspace now ships the machinery this engine used
+//! to implement by hand: cubic-root solving, the residual (departure)
+//! enthalpy/entropy terms, and critical-point-safe root selection. This
+//! module adapts the engine's anchor-calibrated fluid table onto that
+//! machinery behind the same three functions the rest of the engine calls:
+//! [`vapor_z`], [`residual_enthalpy`], [`residual_entropy`].
 //!
-//! Accuracy away from the critical point is a few percent on density; the
-//! residual terms are small corrections on top of saturation-anchored h/s.
-//! Everything here is closed-form in Z, solved from the standard cubic.
+//! Two deliberate choices:
+//! - **PR-1976 alpha.** The upstream default alpha is the SRK Soave kappa
+//!   (`0.48 + 1.574ω − 0.176ω²`); Peng-Robinson's own paper uses
+//!   `0.37464 + 1.54226ω − 0.26992ω²`, which is what the engine's validated
+//!   numbers were produced with — supplied here as a pluggable
+//!   [`AlphaFunction`].
+//! - **No volume translation** on the vapor side. The saturated *liquid*
+//!   density stays with the anchor-calibrated Rackett curve in
+//!   `saturation.rs` (densities at the calibration anchors are exact, which
+//!   beats an uncalibrated Peneloux translation for this application).
+//!
+//! The residual terms anchor the superheated-vapor h/s to the saturation
+//! curve; the vapor-root compressibility gives vapor density.
 
-use crate::fluids::{specific_gas_constant, Fluid};
+use crate::fluids::{Fluid, FLUIDS};
+use tpt_thermo_core::component::ComponentDatabase;
+use tpt_thermo_core::quantities::{MolarMass, Pressure, Temperature};
+use tpt_thermo_core::{EquationOfState, R};
+use tpt_thermo_eos_cubic::alpha::AlphaFunction;
+use tpt_thermo_eos_cubic::mixing::VdwMixing;
+use tpt_thermo_eos_cubic::{PengRobinson, Phase};
 
-/// PR constants at one (T, p) state.
-struct PrPoint {
-    z: f64,
-    /// B = b·p/(R·T) (dimensionless).
-    b: f64,
-    /// κ·√Tr·[1 + κ(1 − √Tr)] — the T·dα/dT factor of the departure terms.
-    t_dalpha: f64,
-}
+/// The Peng-Robinson (1976) alpha function, `κ = 0.37464 + 1.54226ω − 0.26992ω²`.
+struct PrKappaAlpha;
 
-/// Evaluates PR at `(t [K], p [kPa])`, returning the **vapor** (largest-real)
-/// compressibility root.
-fn vapor_point(fluid: &Fluid, t: f64, p_kpa: f64) -> PrPoint {
-    let r = specific_gas_constant(fluid) * 1000.0; // J/(kg·K)
-    let tr = t / fluid.t_crit;
-    let sqrt_tr = tr.sqrt();
-    let kappa = 0.37464 + 1.54226 * fluid.omega - 0.26992 * fluid.omega * fluid.omega;
-    // α(T) = [1 + κ(1 − √Tr)]²  (the a·α attraction term's temperature factor)
-    let alpha = (1.0 + kappa * (1.0 - sqrt_tr)).powi(2);
-    // T·dα/dT with dα/dT = κ[1+κ(1−√Tr)]/√(T·Tc):
-    let t_dalpha = kappa * sqrt_tr * (1.0 + kappa * (1.0 - sqrt_tr));
-
-    let p_pa = p_kpa * 1000.0;
-    // a = 0.45724·R²Tc²/Pc, b = 0.07780·R·Tc/Pc (per-mass form; the a/R²T²
-    // and b/RT reductions below make the per-mass scale cancel anyway).
-    let a_coef = 0.45724 * r * r * fluid.t_crit * fluid.t_crit / (fluid.p_crit * 1000.0);
-    let b_coef = 0.07780 * r * fluid.t_crit / (fluid.p_crit * 1000.0);
-
-    let big_a = a_coef * alpha * p_pa / (r * r * t * t);
-    let big_b = b_coef * p_pa / (r * t);
-
-    // Z³ − (1−B)Z² + (A − 3B² − 2B)Z − (AB − B² − B³) = 0
-    let c2 = -(1.0 - big_b);
-    let c1 = big_a - 3.0 * big_b * big_b - 2.0 * big_b;
-    let c0 = -(big_a * big_b - big_b * big_b - big_b * big_b * big_b);
-    let z = largest_real_root(c2, c1, c0);
-
-    PrPoint { z, b: big_b, t_dalpha }
-}
-
-/// Largest real root of x³ + c2·x² + c1·x + c0 = 0 on (0, 1], found by
-/// scanning downward from 1.0 for the first sign change and bisecting inside
-/// that step. The vapor root always sits in (1−B, 1] with f(1) = A > 0, so
-/// this never needs a convergence guess; 60 scan steps + 60 bisections give
-/// full f64 precision.
-fn largest_real_root(c2: f64, c1: f64, c0: f64) -> f64 {
-    let f = |z: f64| ((z + c2) * z + c1) * z + c0;
-    let steps = 60;
-    let mut hi = 1.0;
-    for k in 1..=steps {
-        let z = 1.0 - (k as f64) / (steps as f64);
-        if f(z) < 0.0 {
-            // Sign change inside (z, hi]: bisect.
-            let mut lo = z;
-            for _ in 0..60 {
-                let mid = 0.5 * (lo + hi);
-                if f(mid) < 0.0 {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            return 0.5 * (lo + hi);
-        }
-        hi = z;
+impl AlphaFunction for PrKappaAlpha {
+    fn alpha(&self, tr: f64, omega: f64) -> f64 {
+        let kappa = 0.37464 + 1.54226 * omega - 0.26992 * omega * omega;
+        let m = 1.0 + kappa * (1.0 - tr.sqrt());
+        m * m
     }
-    // No sign change below 1.0 → the root is 1.0 itself (A → 0 limit).
-    1.0
 }
 
-/// Compressibility factor of the vapor at `(t [K], p [kPa])`.
+/// Presents one engine fluid as a one-component upstream database.
+struct FluidDb {
+    idx: usize,
+}
+
+impl ComponentDatabase for FluidDb {
+    fn num_components(&self) -> usize {
+        1
+    }
+    fn name(&self, _i: usize) -> Result<&str, tpt_thermo_core::ThermoError> {
+        Ok(FLUIDS[self.idx].name)
+    }
+    fn critical_temperature(&self, _i: usize) -> Result<Temperature, tpt_thermo_core::ThermoError> {
+        Ok(Temperature::new::<tpt_math_units::uom::si::thermodynamic_temperature::kelvin>(
+            FLUIDS[self.idx].t_crit,
+        ))
+    }
+    fn critical_pressure(&self, _i: usize) -> Result<Pressure, tpt_thermo_core::ThermoError> {
+        Ok(Pressure::new::<tpt_math_units::uom::si::pressure::pascal>(
+            FLUIDS[self.idx].p_crit * 1000.0,
+        ))
+    }
+    fn acentric_factor(&self, _i: usize) -> Result<f64, tpt_thermo_core::ThermoError> {
+        Ok(FLUIDS[self.idx].omega)
+    }
+    fn molar_mass(&self, _i: usize) -> Result<MolarMass, tpt_thermo_core::ThermoError> {
+        Ok(MolarMass::new::<tpt_math_units::uom::si::molar_mass::kilogram_per_mole>(
+            FLUIDS[self.idx].molar_mass / 1000.0,
+        ))
+    }
+}
+
+/// The upstream PR model for `fluid` (PR-1976 alpha, zero-BIP vdW mixing).
+fn model(fluid: &Fluid) -> PengRobinson {
+    let idx = FLUIDS
+        .iter()
+        .position(|f| std::ptr::eq(f, fluid))
+        .expect("fluid comes from the FLUIDS table");
+    PengRobinson::with_alpha_and_mixing(
+        &FluidDb { idx },
+        Box::new(PrKappaAlpha),
+        Box::new(VdwMixing::new(1)),
+    )
+    .expect("one-component database always builds")
+}
+
+/// Compressibility factor of the vapor at `(t [K], p [kPa])`: the largest
+/// real root of the PR cubic.
 pub fn vapor_z(fluid: &Fluid, t: f64, p_kpa: f64) -> f64 {
-    vapor_point(fluid, t, p_kpa).z
+    let m = model(fluid);
+    let roots = m.engine().z_roots(
+        Temperature::new::<tpt_math_units::uom::si::thermodynamic_temperature::kelvin>(t),
+        Pressure::new::<tpt_math_units::uom::si::pressure::kilopascal>(p_kpa),
+        &[1.0],
+    );
+    roots
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(0.0)
 }
 
 /// Residual enthalpy h^R [kJ/kg] at `(t [K], p [kPa])` (vapor root).
 ///
-/// h^R = R·T·(Z−1) + (T·da/dT − a)/(2√2·b)·ln[(Z+(1+√2)B)/(Z+(1−√2)B)],
-/// expressed through the dimensionless A, B and T·dα/dT factors.
+/// Delegates to the upstream residual term; the plain (untranslated) PR
+/// model's `molar_enthalpy` is residual-only, so no reference bookkeeping
+/// is needed — just the molar → mass conversion.
 pub fn residual_enthalpy(fluid: &Fluid, t: f64, p_kpa: f64) -> f64 {
-    let pt = vapor_point(fluid, t, p_kpa);
-    let r = specific_gas_constant(fluid);
-    let log_term = ((pt.z + (1.0 + 2f64.sqrt()) * pt.b)
-        / (pt.z + (1.0 - 2f64.sqrt()) * pt.b))
-    .abs()
-    .ln();
-    // H^R/(R·T) = Z − 1 + (T·dα/dT − α)/(2√2·B)·ln(…); α recomputed inline.
-    let tr = t / fluid.t_crit;
-    let kappa = 0.37464 + 1.54226 * fluid.omega - 0.26992 * fluid.omega * fluid.omega;
-    let alpha = (1.0 + kappa * (1.0 - tr.sqrt())).powi(2);
-    r * t * (pt.z - 1.0 + (pt.t_dalpha - alpha) / (2.0 * 2f64.sqrt() * pt.b) * log_term) / 1000.0
+    let m = model(fluid);
+    let t_q = Temperature::new::<tpt_math_units::uom::si::thermodynamic_temperature::kelvin>(t);
+    let p_q = Pressure::new::<tpt_math_units::uom::si::pressure::kilopascal>(p_kpa);
+    let v = m
+        .solve_phase(t_q, p_q, &[1.0], Phase::Vapor)
+        .expect("vapor volume solve inside the engine's validity range");
+    let h_molar = m
+        .molar_enthalpy(t_q, v, &[1.0])
+        .expect("residual enthalpy inside the engine's validity range");
+    // J/mol ÷ g/mol = kJ/kg (molar_mass is kg/kmol, numerically g/mol).
+    h_molar.value / fluid.molar_mass
 }
 
 /// Residual entropy s^R [kJ/(kg·K)] at `(t [K], p [kPa])` (vapor root).
 ///
-/// s^R/R = ln(Z − B) + (dα·T factor)/(2√2·B)·ln(…)
+/// The upstream `molar_entropy` also carries an ideal-gas pressure
+/// reference part (`−R·ln(p/1 bar)` for a pure fluid), which the engine's
+/// saturation-anchored composition adds itself in a different datum —
+/// subtract it so this returns the pure residual contribution.
 pub fn residual_entropy(fluid: &Fluid, t: f64, p_kpa: f64) -> f64 {
-    let pt = vapor_point(fluid, t, p_kpa);
-    let r = specific_gas_constant(fluid);
-    let log_term = ((pt.z + (1.0 + 2f64.sqrt()) * pt.b)
-        / (pt.z + (1.0 - 2f64.sqrt()) * pt.b))
-    .abs()
-    .ln();
-    r * ((pt.z - pt.b).abs().max(1e-15).ln()
-        + pt.t_dalpha / (2.0 * 2f64.sqrt() * pt.b) * log_term)
-        / 1000.0
+    let m = model(fluid);
+    let t_q = Temperature::new::<tpt_math_units::uom::si::thermodynamic_temperature::kelvin>(t);
+    let p_q = Pressure::new::<tpt_math_units::uom::si::pressure::kilopascal>(p_kpa);
+    let v = m
+        .solve_phase(t_q, p_q, &[1.0], Phase::Vapor)
+        .expect("vapor volume solve inside the engine's validity range");
+    let s_molar = m
+        .molar_entropy(t_q, v, &[1.0])
+        .expect("residual entropy inside the engine's validity range");
+    // s_ig (pure fluid, zero reference cp) = −R·ln(p / 1e5 Pa); add it back
+    // out to leave the pure residual term.
+    let s_residual_molar = s_molar.value + R * ((p_kpa * 1000.0) / 1.0e5).ln();
+    s_residual_molar / fluid.molar_mass
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fluids::{find, FLUIDS};
+    use crate::fluids::{find, specific_gas_constant, FLUIDS};
 
     #[test]
     fn vapor_z_tends_to_one_at_low_pressure() {

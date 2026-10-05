@@ -198,14 +198,14 @@ pub fn main_sections(main: &mut ContainerBuilder<crate::app::Msg>) {
     // P-h diagram card (canvas appended by mount code).
     main.container(|card| {
         card.heading(3, "P-h diagram");
-        card.container(|holder| {}).class("thermo-ph-viewer");
+        card.container(|_holder| {}).class("thermo-ph-viewer");
     })
     .class("thermo-card");
 
     // Reactive refrigeration results.
-    main.container(|el| {}).class("thermo-ref-results");
+    main.container(|_el| {}).class("thermo-ref-results");
     // Reactive Rankine results.
-    main.container(|el| {}).class("thermo-rankine-results");
+    main.container(|_el| {}).class("thermo-rankine-results");
 }
 
 // ---------------------------------------------------------------------------
@@ -593,7 +593,6 @@ pub enum CurrentCalc {
 
 /// Captures the current UI state + latest results as something savable.
 pub fn capture_current(
-    container: &web_sys::Element,
     lookup_outcome: &crate::app::Outcome,
     ref_outcome: &CycleOutcome,
     rankine_outcome: &RankineOutcome,
@@ -828,7 +827,7 @@ pub fn download(filename: &str, mime: &str, text: &str) {
     else {
         return;
     };
-    let mut props = web_sys::BlobPropertyBag::new();
+    let props = web_sys::BlobPropertyBag::new();
     props.set_type(mime);
     let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &props) else {
         return;
@@ -851,11 +850,6 @@ pub fn download(filename: &str, mime: &str, text: &str) {
         }
     }
     let _ = web_sys::Url::revoke_object_url(&url);
-}
-
-/// Removes one saved calc (called from the app dispatch).
-pub fn delete_calc(id: &str) {
-    library::delete(id);
 }
 
 fn label<Msg2>(field: &mut ContainerBuilder<Msg2>, text: impl Into<String>) {
