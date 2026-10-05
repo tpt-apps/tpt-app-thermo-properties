@@ -79,7 +79,27 @@
       in this file's header is stale)
 
 ## Phase 4 — Ship & measure
-- [ ] Registry entry (`engineering` category, `wasm: { entry: '/apps/thermo-properties/thermo-properties.js' }`)
+- [x] Registry entry (`engineering` category, `wasm: { entry: '/apps/thermo-properties/thermo-properties.js' }`)
       per the "Adding a finished app to the hub" runbook at the bottom of apps.md
-- [ ] Verify hub card/detail/sitemap/runner in dev, then prod after deploy
-- [ ] WASM size budget check on the shipped build
+      — added to `tpt-apps-registry.ts` with `status: 'coming-soon'`,
+      `price: '$249'`, and the proFeatures list; committed to the web repo
+      (push + deploy are the user's manual steps)
+- [x] Verify hub card/detail/sitemap/runner in dev, then prod after deploy
+      — dev-verified on the live Next dev server: /tools card renders with
+      the SOON badge and Engineering tag; /tools/thermo-properties mounts
+      the app via WasmAppRunner and a lookup (R-717 @ 20 °C → 857.5 kPa,
+      the exact reference anchor) runs inside the hub page. Prod check
+      pending deploy. (Sitemap picks the entry up on the next production
+      build, per `src/app/sitemap.ts`.)
+- [x] WASM size budget check on the shipped build
+      — free edition 218 KB raw / **89.5 KB gz** (budget ~2 MB gz); pro exe
+      1.2 MB single file
+
+### Manual steps remaining (user)
+1. Publish the Gumroad product per `GUMROAD.md` (upload
+   `target/release/tpt-thermo-properties-pro.exe`, paste the listing copy,
+   $249) → copy the product URL.
+2. Paste the URL into the `thermo-properties` entry's `gumroadUrl` in
+   `tpt-apps-registry.ts` and flip `status` to `'live'`.
+3. Commit + push the web repo, deploy to prod, and re-verify the card,
+   detail page and runner on tptsolutions.co.nz.
