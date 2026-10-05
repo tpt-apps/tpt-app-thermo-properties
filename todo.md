@@ -58,13 +58,25 @@
       `public/apps/thermo-properties/`)
 
 ## Phase 3 — Paid desktop edition (cargo feature `pro`)
-- [ ] `pro` gates: full refrigeration/Rankine cycle analysis, saved fluid
+- [x] `pro` gates: full refrigeration/Rankine cycle analysis, saved fluid
       property library, exportable calculation sheets for design documentation
-- [ ] Pro UI: cycle input form, cycle diagram/results, saved-calc library,
+      — engine: `refrigeration_cycle` (9 fluids), `rankine_cycle`
+      (IAPWS-IF97 via `tpt-eng-props-water`, engine feature `pro`); app:
+      cycle cards, P-h diagram canvas, saved-calc library (localStorage),
+      Markdown calc-sheet + CSV export, header Pro chip, upsell gated out
+- [x] Pro UI: cycle input form, cycle diagram/results, saved-calc library,
       export button
-- [ ] Desktop shell via `tpt-appfront-webview`; Windows exe build + smoke test
-- [ ] Gumroad product from apps.md listing copy ($99), exe upload, URL into
+      — browser-verified: refrigeration COP 4.04 @ ηs 0.7 (ideal-cycle
+      validation 5.4), Moran Rankine base case 35.7%, P-h diagram with dome/
+      isobars/2s marker, library save/load/delete round-trip, sheet+CSV
+      export buttons
+- [x] Desktop shell via `tpt-appfront-webview`; Windows exe build + smoke test
+      — `tpt-thermo-properties-pro.exe` (embedded dist/, single-file),
+      launches and stays alive; `build.ps1 -Pro` produces it end-to-end
+- [ ] Gumroad product from apps.md listing copy ($249), exe upload, URL into
       registry — manual step, listing copy at apps.md §T1-6
+      (**price is $249** per apps.md §T1-6 and GUMROAD.md; the older "$99"
+      in this file's header is stale)
 
 ## Phase 4 — Ship & measure
 - [ ] Registry entry (`engineering` category, `wasm: { entry: '/apps/thermo-properties/thermo-properties.js' }`)

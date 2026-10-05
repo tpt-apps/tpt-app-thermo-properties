@@ -24,8 +24,9 @@ that changes, update here too (and vice versa).
 
 ## File to upload
 
-Not built yet. Once packaged, this will be the Pro exe/zip produced by the
-app's `build.ps1 -Pro` (or equivalent) — see `todo.md`.
+`target/release/tpt-thermo-properties-pro.exe` — built by `./build.ps1 -Pro`.
+The exe embeds its web bundle (single file, no zip needed); rename it with a
+version, e.g. `TPT-Thermo-Properties-Pro-1.0.0.exe`, before uploading.
 
 ## Product name
 

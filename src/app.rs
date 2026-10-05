@@ -17,11 +17,33 @@ use tpt_thermo_engine::fluids::{self, Fluid, FLUIDS};
 use tpt_thermo_engine::saturation;
 use tpt_thermo_engine::state::{self, State};
 use wasm_bindgen::prelude::*;
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+use crate::{library, pro, viewer};
+
+// (pro) Which section the user solved last — Save/Export capture that one
+// when several results are on screen. Wasm is single-threaded; a plain
+// thread-local cell is the cheapest correct marker.
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+thread_local! {
+    static LAST_SOLVED: std::cell::Cell<&'static str> = const { std::cell::Cell::new("lookup") };
+}
+
+/// (pro) Records the most recently solved section ("lookup" | "ref" | "rankine").
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+pub fn note_solved(section: &'static str) {
+    LAST_SOLVED.with(|cell| cell.set(section));
+}
+
+/// (pro) The most recently solved section.
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+pub fn last_solved() -> &'static str {
+    LAST_SOLVED.with(|cell| cell.get())
+}
 use wasm_bindgen::JsCast;
 
 /// The results section's current content.
 #[derive(Clone)]
-enum Outcome {
+pub enum Outcome {
     Idle,
     /// Field validation / lookup errors, rendered as an issue list.
     Invalid(Vec<String>),
@@ -30,20 +52,20 @@ enum Outcome {
 
 /// One successful lookup: the saturation context (when applicable) plus the
 /// evaluated point.
-struct Solved {
-    fluid: &'static Fluid,
+pub struct Solved {
+    pub fluid: &'static Fluid,
     /// Mode the lookup ran in (drives the property table's shape).
-    mode: Mode,
+    pub mode: Mode,
     /// Saturation temperature [°C] when the point sits on the line.
-    t_sat_c: Option<f64>,
+    pub t_sat_c: Option<f64>,
     /// Saturation pressure [kPa] when the point sits on the line.
-    p_sat_kpa: Option<f64>,
+    pub p_sat_kpa: Option<f64>,
     /// The evaluated point (superheat) or `None` for pure saturation tables.
-    point: Option<State>,
+    pub point: Option<State>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Mode {
+pub enum Mode {
     SatByTemperature,
     SatByPressure,
     Superheated,
@@ -74,12 +96,33 @@ impl Mode {
 }
 
 #[derive(Debug, Clone)]
-enum Msg {
+pub enum Msg {
     Lookup,
     /// Lookup-mode select changed — show/hide the matching input rows.
     ModeChanged(String),
     /// Fill the form with a worked example.
     Example,
+    /// (pro) Solve the refrigeration-cycle card.
+    #[cfg(feature = "pro")]
+    SolveRefCycle,
+    /// (pro) Solve the Rankine-cycle card.
+    #[cfg(feature = "pro")]
+    SolveRankine,
+    /// (pro) Save the current calc into the library.
+    #[cfg(feature = "pro")]
+    SaveCurrent,
+    /// (pro) Delete the saved calc with this id.
+    #[cfg(feature = "pro")]
+    DeleteCalc(String),
+    /// (pro) Re-run the saved calc with this id.
+    #[cfg(feature = "pro")]
+    LoadCalc(String),
+    /// (pro) Export the current calc as a Markdown calculation sheet.
+    #[cfg(feature = "pro")]
+    ExportSheet,
+    /// (pro) Export the current calc's state points as CSV.
+    #[cfg(feature = "pro")]
+    ExportCsv,
     /// Open a TPT Solutions URL — in a new browser tab for the in-browser
     /// free edition, or via the desktop host's system-browser IPC action for
     /// the Pro desktop shell (whose webview would otherwise navigate itself
@@ -137,6 +180,7 @@ select.thermo-input{width:100%}
 .thermo-app tbody tr:hover{background:var(--th-panel)}
 .thermo-fluidcard td:first-child{color:var(--th-muted)}
 
+.thermo-ph-viewer canvas{width:100%;height:auto;display:block;border-radius:8px;background:var(--th-panel)}
 .thermo-upsell{border-radius:14px;padding:16px 18px;background:linear-gradient(135deg,var(--th-accent-soft),transparent);border:1px dashed var(--th-accent);color:var(--th-fg);font-size:.88rem}
 .thermo-upsell h3{margin:0 0 6px}
 .thermo-upsell a{color:var(--th-accent);font-weight:700;text-decoration:none}
@@ -179,18 +223,91 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
     }
 
     let outcome: Signal<Outcome> = Signal::new(Outcome::Idle);
+    #[cfg(feature = "pro")]
+    let ref_outcome: Signal<pro::CycleOutcome> = Signal::new(pro::CycleOutcome::Idle);
+    #[cfg(feature = "pro")]
+    let rankine_outcome: Signal<pro::RankineOutcome> = Signal::new(pro::RankineOutcome::Idle);
+    #[cfg(feature = "pro")]
+    let lib_outcome: Signal<pro::LibraryOutcome> =
+        Signal::new(pro::LibraryOutcome::List(Rc::new((0, Vec::new()))));
+    #[cfg(feature = "pro")]
+    let lib_counter = std::rc::Rc::new(std::cell::Cell::new(0u64));
 
     let dispatch: Rc<dyn Fn(Msg)> = {
         let container = container.clone();
         let outcome = outcome.clone();
+        #[cfg(feature = "pro")]
+        let ref_outcome = ref_outcome.clone();
+        #[cfg(feature = "pro")]
+        let rankine_outcome = rankine_outcome.clone();
+        #[cfg(feature = "pro")]
+        let lib_outcome = lib_outcome.clone();
+        #[cfg(feature = "pro")]
+        let lib_counter = lib_counter.clone();
         Rc::new(move |msg| match msg {
-            Msg::Lookup => run_lookup(&container, &outcome),
+            Msg::Lookup => {
+                run_lookup(&container, &outcome);
+                #[cfg(feature = "pro")]
+                note_solved("lookup");
+            }
             Msg::ModeChanged(id) => apply_mode(&container, Mode::from_id(&id)),
             Msg::Example => {
                 apply_example(&container);
                 run_lookup(&container, &outcome);
             }
             Msg::VisitSite(url) => visit_site(&url),
+            #[cfg(feature = "pro")]
+            Msg::SolveRefCycle => {
+                pro::solve_ref_cycle(&container, &ref_outcome);
+                note_solved("ref");
+            }
+            #[cfg(feature = "pro")]
+            Msg::SolveRankine => {
+                pro::solve_rankine(&container, &rankine_outcome);
+                note_solved("rankine");
+            }
+            #[cfg(feature = "pro")]
+            Msg::SaveCurrent => {
+                let lookup = outcome.get();
+                let refr = ref_outcome.get();
+                let rank = rankine_outcome.get();
+                let calc = pro::capture_current(&container, &lookup, &refr, &rank);
+                match pro::save_current(&calc) {
+                    Ok(_) => pro::refresh_library(&lib_outcome, lib_counter.get() + 1),
+                    Err(msg) => alert(&msg),
+                }
+            }
+            #[cfg(feature = "pro")]
+            Msg::DeleteCalc(id) => {
+                pro::delete_calc(&id);
+                pro::refresh_library(&lib_outcome, lib_counter.get() + 1);
+            }
+            #[cfg(feature = "pro")]
+            Msg::LoadCalc(id) => {
+                if let Some(entry) = library::list().into_iter().find(|e| e.id == id) {
+                    pro::load_calc(&entry, &container, &outcome, &ref_outcome, &rankine_outcome);
+                }
+            }
+            #[cfg(feature = "pro")]
+            Msg::ExportSheet => {
+                let lookup = outcome.get();
+                let refr = ref_outcome.get();
+                let rank = rankine_outcome.get();
+                let calc = pro::capture_current(&container, &lookup, &refr, &rank);
+                if let Err(msg) = pro::export_calc_sheet(&calc) {
+                    alert(&msg);
+                }
+            }
+            #[cfg(feature = "pro")]
+            Msg::ExportCsv => {
+                let lookup = outcome.get();
+                let refr = ref_outcome.get();
+                let rank = rankine_outcome.get();
+                let calc = pro::capture_current(&container, &lookup, &refr, &rank);
+                if let Err(msg) = pro::export_calc_csv(&calc) {
+                    alert(&msg);
+                }
+            }
         })
     };
 
@@ -215,7 +332,154 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
         dispatch.clone(),
     )?;
     std::mem::forget(handle);
+
+    // 3. (pro) Cycle sections, P-h viewer and library.
+    #[cfg(feature = "pro")]
+    mount_pro_sections(
+        container,
+        &dispatch,
+        &ref_outcome,
+        &rankine_outcome,
+        &lib_outcome,
+    )?;
+
     Ok(())
+}
+
+/// (pro) Wires the cycle cards' reactive sections, the P-h canvas and the
+/// saved-calc list. Called once from [`mount_app`].
+#[cfg(feature = "pro")]
+fn mount_pro_sections(
+    container: &web_sys::Element,
+    dispatch: &Rc<dyn Fn(Msg)>,
+    ref_outcome: &Signal<pro::CycleOutcome>,
+    rankine_outcome: &Signal<pro::RankineOutcome>,
+    lib_outcome: &Signal<pro::LibraryOutcome>,
+) -> Result<(), JsValue> {
+    let document = web_sys::window()
+        .expect("no window")
+        .document()
+        .expect("no document");
+
+    // Refrigeration results section.
+    let el = container
+        .query_selector(".thermo-ref-results")?
+        .ok_or_else(|| JsValue::from_str("ref results placeholder missing"))?;
+    let outcome_for_render = ref_outcome.clone();
+    let handle = tpt_appfront_dom::render(
+        &el,
+        Rc::new(move || pro::ref_results_view(outcome_for_render.clone())),
+        dispatch.clone(),
+    )?;
+    std::mem::forget(handle);
+
+    // Rankine results section.
+    let el = container
+        .query_selector(".thermo-rankine-results")?
+        .ok_or_else(|| JsValue::from_str("rankine results placeholder missing"))?;
+    let outcome_for_render = rankine_outcome.clone();
+    let handle = tpt_appfront_dom::render(
+        &el,
+        Rc::new(move || pro::rankine_results_view(outcome_for_render.clone())),
+        dispatch.clone(),
+    )?;
+    std::mem::forget(handle);
+
+    // Saved-calc list.
+    let el = container
+        .query_selector(".thermo-lib-list")?
+        .ok_or_else(|| JsValue::from_str("library placeholder missing"))?;
+    let outcome_for_render = lib_outcome.clone();
+    let handle = tpt_appfront_dom::render(
+        &el,
+        Rc::new(move || pro::library_view(outcome_for_render.clone())),
+        dispatch.clone(),
+    )?;
+    std::mem::forget(handle);
+    pro::refresh_library(lib_outcome, 0);
+
+    // P-h canvas, redrawn from the refrigeration outcome.
+    let holder = container
+        .query_selector(".thermo-ph-viewer")?
+        .ok_or_else(|| JsValue::from_str("P-h viewer placeholder missing"))?;
+    let canvas: web_sys::HtmlCanvasElement = document
+        .create_element("canvas")?
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("canvas cast failed"))?;
+    canvas.set_width(viewer::W as u32);
+    canvas.set_height(viewer::H as u32);
+    holder.append_child(&canvas)?;
+
+    let container_for_css = container.clone();
+    let ref_effect = ref_outcome.clone();
+    let handle = tpt_appfront_core::create_effect(move || {
+        if let pro::CycleOutcome::Solved(solved) = ref_effect.get() {
+            let fg = read_css(&container_for_css, "--th-fg", "#1f2430");
+            let muted = read_css(&container_for_css, "--th-muted", "#667085");
+            let accent = read_css(&container_for_css, "--th-accent", "#b3541e");
+            viewer::draw(&canvas, solved.fluid, &solved.result, &fg, &muted, &accent);
+        }
+    });
+    std::mem::forget(handle);
+    Ok(())
+}
+
+/// web-sys window (None off-DOM).
+#[cfg(feature = "pro")]
+fn window() -> Option<web_sys::Window> {
+    web_sys::window()
+}
+
+/// Browser-computed CSS variable, with a light-theme fallback for the canvas.
+#[cfg(feature = "pro")]
+fn read_css(container: &web_sys::Element, name: &str, fallback: &str) -> String {
+    window()
+        .and_then(|w| w.get_computed_style(container).ok()?)
+        .and_then(|style| style.get_property_value(name).ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+#[cfg(feature = "pro")]
+fn alert(message: &str) {
+    if let Some(window) = window() {
+        window.alert_with_message(message);
+    }
+}
+
+/// Pub wrappers for the helpers the pro module reuses.
+#[cfg(feature = "pro")]
+pub fn styled_text_pub<Msg2>(
+    builder: &mut tpt_appfront_core::ContainerBuilder<Msg2>,
+    text: impl Into<String>,
+    class: &'static str,
+) {
+    styled_text(builder, text, class);
+}
+
+#[cfg(feature = "pro")]
+pub fn read_field_pub(container: &web_sys::Element, selector: &str) -> String {
+    read_field(container, selector)
+}
+
+#[cfg(feature = "pro")]
+pub fn write_field_pub(container: &web_sys::Element, selector: &str, value: &str) {
+    write_field(container, selector, value);
+}
+
+#[cfg(feature = "pro")]
+pub fn apply_mode_pub(container: &web_sys::Element, mode_id: &str) {
+    apply_mode(container, Mode::from_id(mode_id));
+}
+
+#[cfg(feature = "pro")]
+pub fn run_lookup_pub(container: &web_sys::Element, outcome: &Signal<Outcome>) {
+    run_lookup(container, outcome);
+}
+
+#[cfg(feature = "pro")]
+pub fn delete_calc(id: &str) {
+    library::delete(id);
 }
 
 fn visit_site(url: &str) {
@@ -259,7 +523,10 @@ fn shell_tree() -> UITree<Msg> {
             header.container(|group| {
                 group.container(|row| {
                     row.heading(2, "Thermo Properties");
+                    #[cfg(not(feature = "pro"))]
                     row.text("Free edition").class("thermo-chip");
+                    #[cfg(feature = "pro")]
+                    row.text("Pro").class("thermo-chip");
                 })
                 .class("thermo-title-row");
                 group.text("Single-point refrigerant property lookups for HVAC, refrigeration and process work — solved locally in your browser. Units: \u{b0}C, kPa, kJ/kg (h = 200 kJ/kg, s = 1 kJ/kg\u{b7}K at 0 \u{b0}C saturated liquid).")
@@ -342,6 +609,9 @@ fn shell_tree() -> UITree<Msg> {
                     .class("thermo-actions");
                 })
                 .class("thermo-card");
+
+                #[cfg(feature = "pro")]
+                pro::sidebar_cards(sidebar);
             })
             .class("thermo-sidebar");
 
@@ -349,6 +619,10 @@ fn shell_tree() -> UITree<Msg> {
                 // Filled reactively by `render` + `results_view`.
                 main.container(|_results| {}).class("thermo-results");
 
+                #[cfg(feature = "pro")]
+                pro::main_sections(main);
+
+                #[cfg(not(feature = "pro"))]
                 main.container(|upsell| {
                     upsell.heading(3, "Need cycle analysis, saved fluids, or exportable calc sheets?");
                     upsell.text("The Pro desktop edition adds full refrigeration and Rankine cycle analysis (COP, work, heat duty, discharge temperatures), a saved fluid property library, and exportable calculation sheets for design documentation \u{2014} a one-time purchase, no subscription.")

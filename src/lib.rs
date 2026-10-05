@@ -13,6 +13,13 @@
 // on other targets); the engine stays target-independent and host-testable.
 #[cfg(target_arch = "wasm32")]
 mod app;
+// (pro) Saved-calculation library, P-h viewer and pro UI sections.
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+mod library;
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+mod pro;
+#[cfg(all(target_arch = "wasm32", feature = "pro"))]
+mod viewer;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

@@ -17,8 +17,6 @@ use crate::fluids::{specific_gas_constant, Fluid};
 /// PR constants at one (T, p) state.
 struct PrPoint {
     z: f64,
-    /// A = a·α·p/(R²T²) (dimensionless).
-    a: f64,
     /// B = b·p/(R·T) (dimensionless).
     b: f64,
     /// κ·√Tr·[1 + κ(1 − √Tr)] — the T·dα/dT factor of the departure terms.
@@ -52,7 +50,7 @@ fn vapor_point(fluid: &Fluid, t: f64, p_kpa: f64) -> PrPoint {
     let c0 = -(big_a * big_b - big_b * big_b - big_b * big_b * big_b);
     let z = largest_real_root(c2, c1, c0);
 
-    PrPoint { z, a: big_a, b: big_b, t_dalpha }
+    PrPoint { z, b: big_b, t_dalpha }
 }
 
 /// Largest real root of x³ + c2·x² + c1·x + c0 = 0 on (0, 1], found by
